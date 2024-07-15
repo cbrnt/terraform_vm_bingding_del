@@ -1,0 +1,47 @@
+#cloud-config
+
+users:
+  - name: root
+    ssh_authorized_keys:
+      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCa0/BvktqLsiFj84GJiDzl/Bi3NIeQ8sqmZLkCKu7nNMYAiAAyXJJgvuArV7sQnNuFa3WCgk5KU9TYZ9sswfS8vMtgIgveISXUJySF5+gL5RSeRxqJ45KotZzLhaRS0yasUz7ZvNkVRMRghQ8nPixwUAIiGHGb6x+VQL3xlT43Fr4ty1ncwpJzzV36StBv5TjvkDkaVOSClh223RZsxEnGcX5eXYfAF3f0TgfoQA76D7sO5XqakWkDG0mLn4as10GcO9luObhQmqbkds23nqDgpKZvx+SEdHzS0WkkxFi4yf0wT/zVvXXjDV4rC75/mgo1g25zzzucw4r7SXxJ+4DHlmRqP6RgA2U2JXB1Mg4N0iql/ipzB1vRBLBEMh2hylS0XPzvxVY5wQDPrd6k/baf5eMJYpieMKkm8+06dFP/WThuvoioj/ZGn9iBZASWYJ2niVvbZ0Gm2l5pWYQ9qN5Z91HjZWtUcpPFiKT8WAmONOexwO204iRwrIvqrXa+xCM=
+
+disable_root: False
+
+write_files:
+  - path: /etc/systemd/system/exporter.service
+    owner: root:root
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Node Exporter service
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Restart=always
+      ExecStartPre=-crictl pull gitlab.msp.komus.net:5050/ars/images/monitoring/node-exporter:1
+      ExecStartPre=-/usr/bin/podman stop exporter-replace
+      ExecStartPre=-/usr/bin/podman rm exporter-replace
+      ExecStart=/usr/bin/podman run --label=disable --net=host --privileged --name exporter-replace -log-driver=k8s-file --log-opt path=/var/log/containers/exporter-replace.log --log-opt max-size=100mb --pid="host" --mount=type=bind,src=/,dst=/host,ro=true,bind-propagation=rslave -d gitlab.msp.komus.net:5050/ars/images/monitoring/node-exporter:1 --path.rootfs="/host" --no-collector.timex
+      Type=forking
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - [setenforce, 0]
+  - sed -i 's/^SELINUX=enforcing$/SELINUX=disabled/' /etc/selinux/config
+  - [systemctl, enable, fix-network-tunnel]
+  - [systemctl, start, fix-network-tunnel]
+  - [systemctl, enable, chronyd]
+  - [systemctl, start, chronyd]
+  - echo '1' > /proc/sys/net/ipv4/ip_forward
+  - echo br_netfilter > /etc/modules-load.d/br_netfilter.conf
+  - systemctl restart systemd-modules-load.service
+  - systemctl restart sshd
+  - sed -i "s/replace/$(hostname -s)/g" /etc/systemd/system/exporter.service
+  - mkdir /var/log/containers
+  - systemctl enable exporter
+  - systemctl start exporter
+  - systemctl restart chronyd
+  - chronyc sources
